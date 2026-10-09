@@ -6,9 +6,16 @@ swift build -c release
 
 APP=dist/MacKeyClean.app
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp .build/release/MacKeyClean "$APP/Contents/MacOS/MacKeyClean"
+
+ICON=Resources/AppIcon.icns
+if [ -f "$ICON" ]; then
+  cp "$ICON" "$APP/Contents/Resources/AppIcon.icns"
+else
+  echo "warning: $ICON missing; run scripts/make_icon.sh" >&2
+fi
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -19,6 +26,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleName</key><string>MacKeyClean</string>
   <key>CFBundleDisplayName</key><string>KeyClean</string>
   <key>CFBundleExecutable</key><string>MacKeyClean</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>1.0.0</string>
   <key>CFBundleVersion</key><string>1</string>

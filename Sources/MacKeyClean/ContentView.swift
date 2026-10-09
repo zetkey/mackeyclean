@@ -1,251 +1,281 @@
-import SwiftUI
 import AppKit
+import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var controller: LockController
 
-    private let ringSize: CGFloat = 96
+    /// Local key monitor used only while capturing a new failsafe key.
+    @State private var keyMonitor: Any?
 
     var body: some View {
         VStack(spacing: 16) {
             header
             if !controller.permissionGranted || controller.tapFailed {
-                permissionCard
+                permissionBanner
             }
-            settingsCard
+            if controller.isLocked {
+                sessionPanel
+            } else {
+                settingsPanel
+            }
             Spacer(minLength: 0)
-            actionArea
+            primaryAction
         }
-        .padding(20)
-        .frame(width: 360, height: 440)
+        .padding(22)
+        .frame(width: 400, height: 600)
+        .background(Color(nsColor: .windowBackgroundColor))
         .background(
-            LinearGradient(
-                colors: [
-                    Color(nsColor: .windowBackgroundColor),
-                    Color(nsColor: .underPageBackgroundColor).opacity(0.55),
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        )
-        .background(WindowAccessor { window in
-            window?.level = controller.isLocked ? .floating : .normal
-        })
-        .onAppear {
-            controller.checkPermission()
-            if !controller.permissionGranted {
-                Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-                    Task { @MainActor in
-                        if controller.permissionGranted { return }
-                        controller.checkPermission()
-                    }
-                }
+            WindowAccessor { window in
+                window?.level = controller.isLocked ? .floating : .normal
             }
+        )
+        .onAppear { controller.checkPermission() }
+        .onChange(of: controller.isRecordingKey) { recording in
+            recording ? installKeyMonitor() : removeKeyMonitor()
         }
+        .onDisappear { removeKeyMonitor() }
     }
 
     // MARK: - Header
 
     private var header: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "keyboard.chevron.compact.down")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(.tint)
-            Text("KeyClean")
-                .font(.title2.bold())
+        HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(.tint.opacity(0.15))
+                .frame(width: 42, height: 42)
+                .overlay(
+                    Image(systemName: "keyboard")
+                        .font(.system(size: 19, weight: .medium))
+                        .foregroundStyle(.tint)
+                )
+            VStack(alignment: .leading, spacing: 2) {
+                Text("KeyClean")
+                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+                Text(controller.isLocked ? "Session running" : "Clean your keyboard safely")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
         }
-        .padding(.top, 4)
     }
 
     // MARK: - Permission
 
-    private var permissionCard: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 10) {
-                Image(systemName: "exclamationmark.shield.fill")
-                    .font(.system(size: 20))
+    private var permissionBanner: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label {
+                Text("Input Monitoring permission is required to block keystrokes.")
+                    .font(.system(size: 12))
+                    .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
-                Text("KeyClean needs Input Monitoring permission to block keyboard input.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.leading)
             }
             HStack(spacing: 8) {
-                Button {
-                    controller.requestPermission()
-                } label: {
-                    Label("Grant Input Monitoring", systemImage: "hand.raised.fill")
-                }
-                .buttonStyle(.borderedProminent)
+                Button("Open Settings") { controller.requestPermission() }
+                    .controlSize(.small)
                 if controller.tapFailed {
-                    Button("Retry") {
-                        controller.checkPermission()
-                    }
+                    Button("Retry") { controller.checkPermission() }
+                        .controlSize(.small)
                 }
             }
         }
-        .padding(14)
-        .frame(maxWidth: .infinity)
-        .background(RoundedRectangle(cornerRadius: 12).fill(.orange.opacity(0.12)))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.orange.opacity(0.25), lineWidth: 1))
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.orange.opacity(0.12)))
     }
 
     // MARK: - Settings
 
-    private var settingsCard: some View {
-        VStack(spacing: 12) {
-            modeRow
-            Divider()
-            durationRow
+    private var settingsPanel: some View {
+        VStack(spacing: 0) {
+            pickerBlock("Lock mode") {
+                Picker("", selection: $controller.mode) {
+                    Text("Keyboard").tag(LockMode.keyboardOnly)
+                    Text("Keyboard + Trackpad").tag(LockMode.keyboardAndTrackpad)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+            divider
+            pickerBlock("Auto-unlock") {
+                Picker("", selection: $controller.duration) {
+                    ForEach(LockController.DurationOption.allCases) { option in
+                        Text(option.label).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                if controller.duration == .custom {
+                    HStack(spacing: 8) {
+                        TextField("", value: $controller.customSeconds, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 64)
+                        Picker("", selection: $controller.customUnit) {
+                            ForEach(CustomUnit.allCases) { unit in
+                                Text(unit.label).tag(unit)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .frame(width: 150)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.top, 8)
+                }
+            }
+            divider
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    caption("Blank screen")
+                    Spacer(minLength: 0)
+                    Toggle("", isOn: $controller.blankScreen)
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                }
+                note(
+                    "Hides everything behind a black screen while cleaning. The overlay still shows a Stop button."
+                )
+            }
+            .padding(.vertical, 12)
+            divider
+            VStack(alignment: .leading, spacing: 8) {
+                caption("Failsafe key")
+                HStack(spacing: 8) {
+                    Text(controller.isRecordingKey ? "Press a key…" : controller.failsafeKey.label)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(controller.isRecordingKey ? .orange : .primary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(.quaternary))
+                    Button(controller.isRecordingKey ? "Cancel" : "Change") {
+                        controller.isRecordingKey
+                            ? controller.cancelKeyRecording() : controller.beginKeyRecording()
+                    }
+                    .controlSize(.small)
+                    Spacer(minLength: 0)
+                }
+                note(
+                    "Press \(controller.failsafeKey.label) \(LockController.failsafePresses)× in a row to force-stop a session."
+                )
+            }
+            .padding(.vertical, 12)
         }
         .padding(14)
-        .background(RoundedRectangle(cornerRadius: 12).fill(.quaternary.opacity(0.45)))
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.quaternary.opacity(0.4)))
     }
 
-    private var modeRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Lock mode")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Picker("Lock mode", selection: Binding(
-                get: { controller.mode },
-                set: { controller.select(mode: $0) }
-            )) {
-                Text("Keyboard").tag(LockMode.keyboardOnly)
-                Text("Keyboard & Trackpad").tag(LockMode.keyboardAndTrackpad)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+    private func pickerBlock<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View
+    {
+        VStack(alignment: .leading, spacing: 8) {
+            caption(title)
+            content()
         }
+        .padding(.vertical, 12)
     }
 
-    private var durationRow: some View {
-        VStack {
-            Picker("Auto-unlock after", selection: $controller.duration) {
-                ForEach(LockController.DurationOption.allCases) { option in
-                    Text(option.label).tag(option)
+    private func caption(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(.secondary)
+    }
+
+    private func note(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundStyle(.tertiary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var divider: some View {
+        Rectangle().fill(.quaternary).frame(height: 1)
+    }
+
+    // MARK: - Active session
+
+    private var sessionPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(controller.statusText)
+                .font(.system(size: 14, weight: .medium, design: .rounded))
+                .monospacedDigit()
+            if controller.lockedUntil != nil {
+                GeometryReader { geometry in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(.quaternary)
+                        Capsule()
+                            .fill(.tint)
+                            .frame(width: geometry.size.width * controller.ringProgress)
+                    }
                 }
+                .frame(height: 6)
             }
-            .pickerStyle(.menu)
-            .fixedSize()
-
-            if controller.duration == .custom {
-                customInput
+            VStack(alignment: .leading, spacing: 8) {
+                Label(controller.failsafeHint, systemImage: "escape")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                FailsafeProgressView(
+                    progress: controller.failsafePressesSoFar,
+                    total: LockController.failsafePresses
+                )
             }
         }
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.quaternary.opacity(0.4)))
     }
 
-    private var customInput: some View {
-        HStack(spacing: 8) {
-            TextField("Value", value: $controller.customSeconds, format: .number)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 60)
-                .onChange(of: controller.customSeconds) { new in
-                    controller.customSeconds = max(1, new)
-                }
-            Picker("Unit", selection: $controller.customUnit) {
-                ForEach(CustomUnit.allCases) { unit in
-                    Text(unit.label).tag(unit)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 110)
-        }
-    }
-
-    // MARK: - Actions
+    // MARK: - Primary action
 
     @ViewBuilder
-    private var actionArea: some View {
+    private var primaryAction: some View {
         if controller.isLocked {
-            lockedView
-        } else {
             Button {
-                controller.lock()
+                controller.unlock()
             } label: {
-                Label("Lock", systemImage: "lock.fill")
-                    .font(.title3.bold())
+                Text("Stop cleaning")
+                    .font(.system(size: 15, weight: .semibold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .tint(.blue)
+            .tint(.red)
+        } else {
+            Button {
+                controller.lock()
+            } label: {
+                Text("Start cleaning")
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
             .disabled(!controller.permissionGranted)
         }
     }
 
-    private var lockedView: some View {
-        VStack(spacing: 14) {
-            countdownRing
+    // MARK: - Failsafe key capture
 
-            if controller.mode == .keyboardOnly {
-                Button {
-                    controller.unlock()
-                } label: {
-                    Label("Unlock", systemImage: "lock.open.fill")
-                        .font(.title3.bold())
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .tint(.red)
+    private func installKeyMonitor() {
+        removeKeyMonitor()
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
+            if event.keyCode == 53 {
+                controller.cancelKeyRecording()
             } else {
-                Text("Unlocks automatically in \(remainingText(until: controller.lockedUntil ?? controller.now))")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                controller.handleRecordedKey(
+                    keyCode: Int64(event.keyCode),
+                    characters: event.charactersIgnoringModifiers
+                )
             }
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    // MARK: - Countdown ring
-
-    private var countdownRing: some View {
-        VStack(spacing: 6) {
-            ZStack {
-                Circle()
-                    .stroke(.red.opacity(0.15), lineWidth: 7)
-                Circle()
-                    .trim(from: 0, to: ringProgress)
-                    .stroke(.red, style: StrokeStyle(lineWidth: 7, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                if let lockedUntil = controller.lockedUntil {
-                    Text(remainingText(until: lockedUntil))
-                        .font(.system(.title, design: .monospaced))
-                        .monospacedDigit()
-                        .bold()
-                } else {
-                    Image(systemName: "lock.fill")
-                        .font(.system(size: 30, weight: .semibold))
-                        .foregroundStyle(.red)
-                }
-            }
-            .frame(width: ringSize, height: ringSize)
-            .accessibilityLabel("Locked")
-
-            Text("Locked")
-                .font(.headline)
-                .foregroundStyle(.red)
+            return nil
         }
     }
 
-    private var ringProgress: CGFloat {
-        guard let lockedUntil = controller.lockedUntil else { return 0 }
-        let base = TimeInterval(controller.customSeconds)
-        let total = controller.duration.presetSeconds
-            ?? (controller.customUnit == .minutes ? base * 60 : base)
-        guard total > 0 else { return 0 }
-        let remaining = max(0, lockedUntil.timeIntervalSince(controller.now))
-        return CGFloat(min(1, max(0, remaining / total)))
-    }
-
-    private func remainingText(until date: Date) -> String {
-        let seconds = max(0, Int(date.timeIntervalSince(controller.now).rounded()))
-        return String(format: "%02d:%02d", seconds / 60, seconds % 60)
+    private func removeKeyMonitor() {
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        keyMonitor = nil
     }
 }
 
@@ -256,15 +286,11 @@ struct WindowAccessor: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
-        DispatchQueue.main.async { [weak view] in
-            onWindow(view?.window)
-        }
+        DispatchQueue.main.async { [weak view] in onWindow(view?.window) }
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async { [weak nsView] in
-            onWindow(nsView?.window)
-        }
+        DispatchQueue.main.async { [weak nsView] in onWindow(nsView?.window) }
     }
 }
